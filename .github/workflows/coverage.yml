@@ -1,0 +1,25 @@
+name: 'Coverage Report'
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      # Backend Coverage Report (Jest)
+      - name: Backend Coverage Report  
+        uses: ArtiomTr/jest-coverage-report-action@v2
+        with:
+          working-directory: ./back
+          test-script: npm test
+          annotations: coverage
