@@ -2,13 +2,22 @@ const { badgen } = require('badgen');
 const fs = require('fs-extra');
 const path = require('path');
 
-// Read coverage summary
-const coverageBackend = require('../back/coverage/coverage-summary.json');
-const coverageFrontend = require('../front/coverage/coverage-summary.json');
+let backPct = 0;
+let frontPct = 0;
 
-// Calculate average or specific (e.g., statements)
-const backPct = coverageBackend.total.statements.pct;
-const frontPct = coverageFrontend.total.statements.pct;
+try {
+    const coverageBackend = require('../back/coverage/coverage-summary.json');
+    backPct = coverageBackend.total.statements.pct;
+} catch (e) {
+    console.warn('Backend coverage missing');
+}
+
+try {
+    const coverageFrontend = require('../front/coverage/coverage-summary.json');
+    frontPct = coverageFrontend.total.statements.pct;
+} catch (e) {
+    console.warn('Frontend coverage missing');
+}
 
 const avgPct = Math.floor((backPct + frontPct) / 2);
 
