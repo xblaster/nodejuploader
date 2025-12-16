@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: upload-svc
+  namespace: nodejuploader
+spec:
+  selector:
+    app: upload-api
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP

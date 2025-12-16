@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: upload-ingress
+  namespace: nodejuploader
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    # Uncomment for TLS with cert-manager
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: upload.example.com  # Change to your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: upload-svc
+                port:
+                  number: 80
+  # Uncomment for TLS
+  # tls:
+  #   - hosts:
+  #       - upload.example.com
+  #     secretName: upload-tls

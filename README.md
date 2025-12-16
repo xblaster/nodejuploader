@@ -96,5 +96,63 @@ cd front
 npm test
 ```
 
+## 🐳 Docker
+
+### Build the Image
+
+```bash
+cd back
+docker build -t nodejuploader:latest .
+```
+
+### Run with Docker
+
+```bash
+docker run -p 8080:8080 -v uploads:/tmp/uploads nodejuploader:latest
+```
+
+## ☸️ Kubernetes Deployment
+
+All Kubernetes manifests are located in the `k8s/` directory.
+
+### Quick Deploy
+
+```bash
+# Create namespace
+kubectl apply -f k8s/namespace.yaml
+
+# Create persistent volume claim
+kubectl apply -f k8s/pvc.yaml
+
+# Deploy the application
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/ingress.yaml
+
+# (Optional) Enable autoscaling
+kubectl apply -f k8s/hpa.yaml
+
+# (Optional) Enable automatic cleanup
+kubectl apply -f k8s/cronjob.yaml
+```
+
+### Configuration
+
+| File | Description |
+|------|-------------|
+| `namespace.yaml` | Creates `nodejuploader` namespace |
+| `pvc.yaml` | 20Gi persistent volume for uploads (RWX) |
+| `deployment.yaml` | 2-replica deployment with health checks |
+| `service.yaml` | ClusterIP service on port 80 |
+| `ingress.yaml` | Nginx ingress (configure your domain) |
+| `hpa.yaml` | Autoscaler (2-10 replicas, 70% CPU) |
+| `cronjob.yaml` | Hourly cleanup of expired files |
+
+### Important Notes
+
+- **PVC requires ReadWriteMany** access mode for multi-pod deployments
+- Update `ingress.yaml` with your actual domain
+- Set appropriate `storageClassName` in `pvc.yaml` for your cluster
+
 ## 📄 License
 MIT

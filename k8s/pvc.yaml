@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: upload-pvc
+  namespace: nodejuploader
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+  # Uncomment and set your storage class
+  # storageClassName: fast-ssd
