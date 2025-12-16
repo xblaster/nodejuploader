@@ -12,7 +12,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: purge
-              image: ghcr.io/xblaster/nodejuploader:latest
+              image: xblaster/nodejuploader:latest
               args: ["--purge-only"]
               env:
                 - name: UPLOAD_DIR

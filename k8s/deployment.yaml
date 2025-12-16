@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: ghcr.io/xblaster/nodejuploader:latest
+          image: xblaster/nodejuploader:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
