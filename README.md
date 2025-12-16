@@ -2,9 +2,12 @@
 
 **Nodejuploader** is a modern, high-performance file upload service designed to handle massive files (multiple GBs) using exclusively **HTTP GET requests** and chunking. It eliminates the need for `POST` requests or `multipart/form-data`, offering a unique approach to large file transfer with pause/resume capabilities (in design) and strict integrity checks.
 
-![Upload Interface](file:///C:/Users/nospa/.gemini/antigravity/brain/566cc74b-61bd-42a6-8dcd-7847f409af26/upload_success_1765903385015.png)
+![Upload Interface](docs/upload_success.png)
 
 ## 🚀 Features
+
+![Coverage](docs/coverage.svg)
+
 
 -   **Zero POST**: All data is transferred via GET query parameters.
 -   **Chunked Uploads**: Files are split into 1KB chunks (configurable) to avoid timeout and memory issues.

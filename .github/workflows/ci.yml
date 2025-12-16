@@ -24,6 +24,10 @@ jobs:
         cache: 'npm'
         cache-dependency-path: '**/package-lock.json'
 
+    # Scripts Deps
+    - name: Install Script Dependencies
+      run: npm install badgen fs-extra
+
     # Backend
     - name: Install Backend Dependencies
       run: cd back && npm ci
@@ -38,6 +42,9 @@ jobs:
 
     - name: Run Frontend Tests
       run: cd front && npm test
+
+    - name: Generate Coverage Badge
+      run: node scripts/generate-badge.js
 
     - name: Build Frontend
       run: cd front && npm run build

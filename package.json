@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "badgen": "^3.2.3",
+    "fs-extra": "^11.3.2"
+  }
+}
