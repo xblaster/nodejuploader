@@ -1,0 +1,338 @@
+# nodjuploader — Spécification fonctionnelle & technique — Upload par chunks GET (Node + Vite, déploiement Kubernetes)
+
+> *upload like a ninja*
+
+> **Mise à jour (22 mai 2025)** : — Suppression de la limite de 5 Mo ; le service accepte désormais des fichiers de plusieurs centaines de méga‑octets (ou plus). — Ajout d’une section détaillée *“Déploiement Kubernetes”*.
+
+---
+
+## 1. Contexte et objectifs
+
+Le projet permet le **téléversement de fichiers binaires sans requêtes POST** : l’envoi s’effectue exclusivement via des requêtes **HTTP GET** transportant de petits fragments (*chunks*) du fichier. Le serveur réassemble ces fragments, stocke le fichier pour une durée limitée (**24 h**), puis fournit une URL publique de téléchargement.
+
+Objectifs clés :
+
+* **Tolérance aux très gros fichiers** : plusieurs centaines de méga‑octets (la seule contrainte provient de la taille d’URL maximale, voir §5).
+* **Aucune requête POST** ni `multipart/form-data`.
+* **Intégrité garantie** via hash SHA‑256 sur le fichier complet.
+* **Effacement automatique** après 24 h → conformité RGPD.
+* **Déploiement cloud‑native sur Kubernetes** avec autoscaling et tolérance de panne.
+
+---
+
+## 2. Architecture générale
+
+```
+┌────────────┐  GET /upload?…   ┌───────────────┐  PV/Repl.   ┌──────────────┐
+│   Vite SPA │ ——————ch1——→  │   Node‑API    │ —assemble→ │  PVC /tmp    │
+│   (client) │ ——— …… chN —→  │  (Express.js) │            │ (24 h TTL) │
+└────────────┘  GET /file/ID   └───────────────┘   link ↑    └──────────────┘
+                                                    │
+                                              GET /file/ID
+```
+
+Le backend est empaqueté dans un conteneur unique (stateless hormis le répertoire **/tmp/uploads** monté sur **PersistentVolumeClaim** pour permettre le partage entre pods lors du down‑/up‑scaling).
+
+---
+
+## 3. Front‑end (Vite + React)
+
+### 3.1 Stack & dépendances
+
+| Outil          | Version min | Rôle                     |
+| -------------- | ----------- | ------------------------ |
+| Vite           | 5.x         | Bundler + dev‑server     |
+| React          | 18.x        | UI Expo                  |
+| Axios ou fetch | —           | Envoi GET programmatique |
+| crypto‑js      | 4.x         | SHA‑256 côté client      |
+
+### 3.2 Flux de téléversement client
+
+1. Sélection d’un fichier (`<input type="file">`).
+2. **Découpage** : taille fixe `chunkSize = 1024 o` (configurable). Pour un fichier de 500 Mo ≈ 512 000 chunks.
+3. Pour chaque chunk `i` (0‑index) :
+
+   ```text
+   GET /upload?fid={uuid}&i={i}&t={total}&h={sha256}&d={base64URL(chunk)}
+   ```
+4. Progression UI (`sentChunks / totalChunks`).
+5. À la fin, polling `GET /status?fid=` jusqu’à `state=ready`.
+6. L’utilisateur copie l’URL `/file/{fid}`.
+
+### 3.3 Gestion d’état client
+
+```ts
+interface UploadState {
+  fileId: string;           // UUID v4
+  totalChunks: number;
+  sentChunks: number;
+  hash: string;             // SHA‑256 hex
+  status: "uploading" | "assembling" | "ready" | "error";
+}
+```
+
+### 3.4 Sécurité & contraintes
+
+* **Aucune limite côté client** ; la mémoire consommée dépend seulement du buffer d’un chunk.
+* CORS strict (`Access-Control-Allow-Origin: https://app.exemple.com`).
+* HTTPS obligatoire.
+
+---
+
+## 4. Back‑end (Node.js + Express)
+
+### 4.1 Modules
+
+| Module    | Version min | Rôle                |
+| --------- | ----------- | ------------------- |
+| Node.js   | ≥ 20        | Runtime             |
+| Express   | 4.19        | HTTP                |
+| UUID      | 9.x         | Identifiant fichier |
+| node‑cron | 3.x         | Purge planifiée     |
+| fs‑extra  | 11.x        | FS API              |
+| crypto    | builtin     | SHA‑256             |
+
+### 4.2 Endpoints
+
+| Méthode | URI                  | Description          |
+| ------- | -------------------- | -------------------- |
+| GET     | `/upload`            | Réception d’un chunk |
+| GET     | `/status?fid=<uuid>` | État d’assemblage    |
+| GET     | `/file/:fid`         | Téléchargement       |
+| GET     | `/health`            | Probe K8s            |
+
+#### 4.2.1 `GET /upload`
+
+**Query params** :
+
+* `fid` : UUID fichier.
+* `i` : index chunk (0‑based).
+* `t` : total chunks.
+* `h` : SHA‑256 du fichier.
+* `d` : chunk Base64URL.
+
+Flux :
+
+1. Valider longueur URL < 8192 caractères (standard browsers/reverse proxies).
+2. Dossier `/tmp/uploads/{fid}` (sur PVC) : créer si absent.
+3. Écrire chunk dans `{i}.part` (stream fs.createWriteStream ✚ `O_EXCL` pour idempotence).
+4. Lorsque `i === t ‑ 1` → pousser un job d’assemblage (queue interne ou worker local).
+5. Répondre `202 Accepted` `{received:i}`.
+
+#### 4.2.2 Assemblage
+
+* Job lit tous les `.part` quand leur compte atteint `t`.
+* Concaténation fluxée : lecture/écriture par stream (pas de chargement complet en RAM).
+* Calcul SHA‑256 en streaming ; comparer à `h`.
+* Si OK : fichier `{fid}.bin` + `meta.json`.
+* Maj statut «ready».
+
+#### 4.2.3 `GET /file/:fid`
+
+* Vérifier TTL ; si expiré → `410 Gone` + purge immédiate.
+* Header : `Cache-Control: no-store, must-revalidate`.
+* `Content-Disposition: attachment; filename="{originalName}"`.
+
+### 4.3 Nettoyage automatique
+
+```
+// simplifié : un cron toutes les heures
+await fs.readdir("/tmp/uploads", (dir) => …)
+// suppression récursive si dir mtime < (Now - 24h)
+```
+
+En production K8s, un **CronJob** dédié peut exécuter la même logique via l’image backend avec arg `--purge-only`.
+
+### 4.4 Sécurité & ressources
+
+* **Limite d’URL** : chunk ≤ \~6000 car. → 1 024 octets bruts.
+* **Quota simultané** : 3 uploads actifs par IP (token bucket in‑memory Redis si multi‑pods).
+* **Filtrage extensions** (liste noire .exe, .bat, etc.).
+
+---
+
+## 5. Format d’un chunk & contraintes d’URL
+
+| Élément                    | Taille max (car.) | Commentaire                                        |
+| -------------------------- | ----------------- | -------------------------------------------------- |
+| Base URL                   | 32                | `/upload?`                                         |
+| fid                        | 36                | UUID v4                                            |
+| index                      | ≤ 7               | jusqu’à 9 999 999 chunks (\~10 Go avec 1 kB/chunk) |
+| total                      | ≤ 7               | idem                                               |
+| hash                       | 64                | SHA‑256 hex                                        |
+| data                       | ≤ 6 000           | 1 024 o → \~1 370 Base64URL                        |
+| **Total** ≈ 6 200 < 8 192. |                   |                                                    |
+
+---
+
+## 6. Séquence d’interactions
+
+1. **Init** (client) → génère `fid`, calcule SHA‑256.
+2. **Upload** bouclé GET `/upload` pour chaque chunk.
+3. **Assemble** (worker) → concat streams + vérif hash.
+4. **Ready** → expose `/file/{fid}`.
+5. **Download** via navigateur ou CLI.
+6. **Cleanup** via CronJob.
+
+---
+
+## 7. Gestion des erreurs
+
+Idem version précédente, sans 413 lié à la taille totale (toujours 413 si chunk > 1 kB ou URL > 8 k).
+
+---
+
+## 8. Tests & validation
+
+* **Unit** : découpage + SHA‑256.
+* **Intégration** : script e2e (> 1 M chunks).
+* **Load** : 100 uploads de 500 Mo parallèles (k6) dans cluster 3 nœuds.
+
+---
+
+## 9. Déploiement Kubernetes
+
+### 9.1 Artefacts YAML (extraits)
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: upload-pvc
+spec:
+  storageClassName: fast-ssd
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: upload-api
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+  selector: {matchLabels: {app: upload-api}}
+  template:
+    metadata:
+      labels: {app: upload-api}
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/org/upload-api:1.0.0
+          ports: [{containerPort: 8080}]
+          env:
+            - name: UPLOAD_DIR
+              value: /tmp/uploads
+          volumeMounts:
+            - mountPath: /tmp/uploads
+              name: upload-storage
+          livenessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+      volumes:
+        - name: upload-storage
+          persistentVolumeClaim:
+            claimName: upload-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: upload-svc
+spec:
+  selector: {app: upload-api}
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: upload-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "16k"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"   # illimité
+spec:
+  rules:
+    - host: upload.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: upload-svc
+                port: {number: 80}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: upload-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: upload-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+```
+
+### 9.2 Notes Ops
+
+* **PVC RWX** requis pour permettre à plusieurs pods de lire/écrire les mêmes chunks / fichiers reconstitués.
+* Le dossier `/tmp/uploads` peut être déplacé vers un **storage objet** (MinIO, S3) en v2.
+* **CronJob purge** :
+
+  ```yaml
+  apiVersion: batch/v1
+  kind: CronJob
+  metadata:
+    name: upload-purge
+  spec:
+    schedule: "0 * * * *"
+    jobTemplate:
+      spec:
+        template:
+          spec:
+            restartPolicy: OnFailure
+            containers:
+              - name: purge
+                image: ghcr.io/org/upload-api:1.0.0
+                args: ["--purge-only"]
+                volumeMounts:
+                  - mountPath: /tmp/uploads
+                    name: upload-storage
+            volumes:
+              - name: upload-storage
+                persistentVolumeClaim:
+                  claimName: upload-pvc
+  ```
+* Pour > 1 Go, envisager **chunkSize 4 kB** (toujours URL < 8 k) pour diviser le nombre de requêtes par 4.
+
+---
+
+## 10. Roadmap
+
+1. **MVP** : support > 500 Mo, parallèle chunks, purge CronJob.
+2. **v1.1** : reprise d’upload (résumé) via endpoint `skip`.
+3. **v1.2** : chiffrement AES end‑to‑end.
+4. **v2** : stockage objet + workers RabbitMQ + CDN.
+
+---
+
+© 2025 — Licence MIT
