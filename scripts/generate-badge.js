@@ -5,18 +5,23 @@ const path = require('path');
 let backPct = 0;
 let frontPct = 0;
 
+function parsePct(val) {
+    if (val === 'Unknown') return 0;
+    return parseFloat(val) || 0;
+}
+
 try {
     const coverageBackend = require('../back/coverage/coverage-summary.json');
-    backPct = coverageBackend.total.statements.pct;
+    backPct = parsePct(coverageBackend.total.statements.pct);
 } catch (e) {
-    console.warn('Backend coverage missing');
+    console.warn('Backend coverage missing', e.message);
 }
 
 try {
     const coverageFrontend = require('../front/coverage/coverage-summary.json');
-    frontPct = coverageFrontend.total.statements.pct;
+    frontPct = parsePct(coverageFrontend.total.statements.pct);
 } catch (e) {
-    console.warn('Frontend coverage missing');
+    console.warn('Frontend coverage missing', e.message);
 }
 
 const avgPct = Math.floor((backPct + frontPct) / 2);
@@ -31,4 +36,4 @@ const svgString = badgen({
 fs.ensureDirSync(path.join(__dirname, '../docs'));
 fs.writeFileSync(path.join(__dirname, '../docs/coverage.svg'), svgString);
 
-console.log(`Badge generated: ${avgPct}%`);
+console.log(`Badge generated: ${avgPct}% (Back: ${backPct}%, Front: ${frontPct}%)`);
