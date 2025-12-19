@@ -5,5 +5,11 @@ module.exports = {
     coverageDirectory: 'coverage',
     coverageReporters: ['json', 'json-summary', 'text', 'lcov'],
     testMatch: ['**/*.test.js'],
-    clearMocks: true
+    clearMocks: true,
+    transformIgnorePatterns: [
+        'node_modules/(?!(uuid)/)'
+    ],
+    transform: {
+        '^.+\\.js$': ['babel-jest', { configFile: './babel.config.js' }]
+    }
 };
